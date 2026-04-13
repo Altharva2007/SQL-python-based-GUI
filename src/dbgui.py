@@ -1,254 +1,286 @@
 #!/usr/bin/env python3
-
 import pathlib
 import sys
 import datetime
+import os
 import tkinter as tk
 from tkinter import ttk, messagebox
-import oracledb as cx_Oracle
-CLIENT_LIB_DIR = pathlib.Path(__file__).resolve().parent.parent / "instantclient_23_8"
-cx_Oracle.init_oracle_client(lib_dir=str(CLIENT_LIB_DIR))
+import oracledb
+from dotenv import load_dotenv
 
-#---------------------------------------------------------------------------
-#  credentials to access the db
-# ---------------------------------------------------------------------------
-DB_USER     = "b00089586"
-DB_PASSWORD = "b00089586"
-DB_HOST     = "coeoracle.aus.edu"         
-DB_PORT     = 1521
-DB_SERVICE  = "orcl"                
+# Load environment variables from .env file for security
+load_dotenv()
 
-
-def make_dsn(host, port, service):
-    return cx_Oracle.makedsn(host, port, service_name=service)
-
-
+# Database credentials retrieved from environment variables
+DB_USER     = os.getenv("DB_USER")
+DB_PASSWORD = os.getenv("DB_PASSWORD")
+DB_HOST     = os.getenv("DB_HOST", "coeoracle.aus.edu")
+DB_PORT     = os.getenv("DB_PORT", "1521")
+DB_SERVICE  = os.getenv("DB_SERVICE", "orcl")
 
 def coerce(value, ora_type):
-    if value == "":
+    """
+    Coerces raw string values from Entry widgets into appropriate Python/Oracle data types.
+    """
+    if value == "" or value is None:
         return None
     t = ora_type.upper()
     if t.startswith("NUMBER"):
         try:
             return int(value) if "." not in value else float(value)
         except ValueError:
-            raise ValueError("Enter a valid number.")
+            raise ValueError("Enter a valid numeric value.")
     if t.startswith(("DATE", "TIMESTAMP")):
         try:
             return datetime.datetime.strptime(value, "%Y-%m-%d")
         except ValueError:
-            raise ValueError("Enter date as YYYY-MM-DD.")
-    return value   # VARCHAR2 / CHAR / CLOB etc.
+            raise ValueError("Enter date in YYYY-MM-DD format.")
+    return value
 
-
-#---------------------------------------------------------------------------
-#  main GUI 
-#---------------------------------------------------------------------------
-class oracleGUIapp(tk.Tk):
-    def __init__(self, connection):
+class OracleGUIApp(tk.Tk):
+    def __init__(self, pool):
         super().__init__()
-        self.title("Car Dealership Manager")
-        self.geometry("720x480")
+        self.title("Car Dealership Manager - Enterprise Edition v1.0")
+        self.geometry("900x700")
 
-        self.conn = connection
-        self.table_meta = []      # (col_name, data_type, nullable)
-        self.entries = {}         # Entry widgets by column
-        self.pk_cols = []         # primary-key column names
-        self.selected_pk = None   # tuple of PK values for current row
+        self.pool = pool  # Database connection pool
+        self.table_meta = []  # Stores (column_name, data_type, nullable)
+        self.entries = {}     # Stores Entry widgets mapped by column name
+        self.pk_cols = []     # Stores Primary Key column names
+        self.selected_pk = None # Stores values of the PK for the currently selected row
 
         self.make_main_screen()
 
-    # ---------------------------------------------------------------------------MAIN UI-----------------------------------------------------------------
+    def get_conn(self):
+        """Acquires a connection from the Oracle connection pool."""
+        return self.pool.acquire()
+
+    def release_conn(self, conn):
+        """Releases the connection back to the pool."""
+        self.pool.release(conn)
+
     def make_main_screen(self):
+        """Initializes the main GUI layout with a sidebar and a content area."""
         container = ttk.PanedWindow(self, orient="horizontal")
         container.pack(fill="both", expand=True)
 
-        # left: table list
+        # Left Panel: Table Explorer
         left = ttk.Frame(container, padding=10)
-        tables_tree = ttk.Treeview(left, show="tree", selectmode="browse", height=20)
-        tables_tree.pack(fill="y", expand=True)
-        tables_tree.bind("<<TreeviewSelect>>",
-                         lambda e: self.load_table(tables_tree.item(tables_tree.selection())["text"]))
-        self.populate_tables(tables_tree)
+        self.tables_tree = ttk.Treeview(left, show="tree", selectmode="browse")
+        self.tables_tree.pack(fill="both", expand=True)
+        self.tables_tree.bind("<<TreeviewSelect>>", self._on_table_select)
+        self.populate_tables()
         container.add(left, weight=1)
 
-        # right: dynamic frame (form + grid)
+        # Right Panel: Dynamic Form and Data Grid
         self.right = ttk.Frame(container, padding=10)
-        container.add(self.right, weight=3)
+        container.add(self.right, weight=4)
 
-    def populate_tables(self, tree):
-        cur = self.conn.cursor()
-        cur.execute("SELECT table_name FROM user_tables ORDER BY table_name")
-        for (tbl,) in cur:
-            tree.insert("", "end", text=tbl)
-            
+    def _on_table_select(self, event):
+        """Handles table selection from the sidebar."""
+        sel = self.tables_tree.selection()
+        if sel:
+            table_name = self.tables_tree.item(sel)["text"]
+            self.load_table(table_name)
+
+    def populate_tables(self):
+        """Fetches all user tables and populates the sidebar treeview."""
+        conn = self.get_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT table_name FROM user_tables ORDER BY table_name")
+            for (tbl,) in cur:
+                self.tables_tree.insert("", "end", text=tbl)
+        finally:
+            self.release_conn(conn)
+
     def load_table(self, table_name):
+        """Loads metadata and data for the selected table and refreshes UI."""
         for child in self.right.winfo_children():
             child.destroy()
 
-        cur = self.conn.cursor()
-        cur.execute("""
-            SELECT column_name, data_type, nullable
-            FROM   user_tab_columns
-            WHERE  table_name = :tbl
-            ORDER BY column_id
-        """, tbl=table_name.upper())
-        self.table_meta = cur.fetchall()
+        conn = self.get_conn()
+        try:
+            cur = conn.cursor()
+            # Fetch Column Metadata: Name, Type, and Nullability
+            cur.execute("""
+                SELECT column_name, data_type, nullable 
+                FROM user_tab_columns 
+                WHERE table_name = :tbl 
+                ORDER BY column_id
+            """, tbl=table_name.upper())
+            self.table_meta = cur.fetchall()
 
-        cur.execute("""
-            SELECT cols.column_name
-            FROM   user_constraints cons
-            JOIN   user_cons_columns cols
-                   ON cons.constraint_name = cols.constraint_name
-            WHERE  cons.table_name = :tbl
-              AND  cons.constraint_type = 'P'
-            ORDER BY cols.position
-        """, tbl=table_name.upper())
-        self.pk_cols = [r[0] for r in cur]
+            # Fetch Primary Key Metadata to handle Updates and Deletes safely
+            cur.execute("""
+                SELECT cols.column_name FROM user_constraints cons
+                JOIN user_cons_columns cols ON cons.constraint_name = cols.constraint_name
+                WHERE cons.table_name = :tbl AND cons.constraint_type = 'P' 
+                ORDER BY cols.position
+            """, tbl=table_name.upper())
+            self.pk_cols = [r[0] for r in cur]
+        finally:
+            self.release_conn(conn)
 
-        frm = ttk.LabelFrame(self.right, text=f"Edit {table_name}")
+        self._render_ui_elements(table_name)
+
+    def _render_ui_elements(self, table_name):
+        """Renders the dynamic input form and the data grid."""
+        # Form Section
+        frm = ttk.LabelFrame(self.right, text=f"Record Management: {table_name}")
         frm.pack(side="top", fill="x", padx=5, pady=5)
 
         self.entries.clear()
         for r, (col, dtype, nullable) in enumerate(self.table_meta):
-            ttk.Label(frm, text=f"{col} ({dtype})").grid(row=r, column=0, sticky="e")
-            ent = ttk.Entry(frm, width=22)
-            ent.grid(row=r, column=1, sticky="w")
+            ttk.Label(frm, text=f"{col} ({dtype})").grid(row=r, column=0, sticky="e", padx=5, pady=2)
+            ent = ttk.Entry(frm, width=35)
+            ent.grid(row=r, column=1, sticky="w", padx=5, pady=2)
             self.entries[col] = ent
-            if nullable == "N":
-                ent.configure(background="#ffd9d9")
 
-        btn_row = len(self.table_meta)
-        bframe = ttk.Frame(frm)
-        bframe.grid(row=btn_row, column=0, columnspan=2, pady=5)
-        ttk.Button(bframe, text="Insert",
-                   command=lambda t=table_name: self.insert_row(t)).pack(side="left", padx=4)
-        ttk.Button(bframe, text="Save Update",
-                   command=lambda t=table_name: self.update_row(t)).pack(side="left", padx=4)
-        ttk.Button(bframe, text="Delete",
-                   command=lambda t=table_name: self.delete_row(t)).pack(side="left", padx=4)
-        ttk.Button(bframe, text="Clear", command=self.clear_form).pack(side="left", padx=4)
+        # CRUD Action Buttons
+        btn_frm = ttk.Frame(frm)
+        btn_frm.grid(row=len(self.table_meta), column=0, columnspan=2, pady=10)
+        ttk.Button(btn_frm, text="Insert", command=lambda: self.insert_row(table_name)).pack(side="left", padx=5)
+        ttk.Button(btn_frm, text="Save Update", command=lambda: self.update_row(table_name)).pack(side="left", padx=5)
+        ttk.Button(btn_frm, text="Delete", command=lambda: self.delete_row(table_name)).pack(side="left", padx=5)
+        ttk.Button(btn_frm, text="Clear", command=self.clear_form).pack(side="left", padx=5)
 
-        # Data grid
-        grid = ttk.Treeview(self.right, show="headings", selectmode="browse")
-        grid["columns"] = [col for col, *_ in self.table_meta]
-        grid.pack(side="bottom", fill="both", expand=True)
-        self.grid = grid
+        # Data Grid (Treeview)
+        self.grid = ttk.Treeview(self.right, show="headings", selectmode="browse")
+        self.grid["columns"] = [col for col, *_ in self.table_meta]
+        self.grid.pack(side="bottom", fill="both", expand=True)
 
         for col, *_ in self.table_meta:
-            grid.heading(col, text=col)
-            grid.column(col, width=100, anchor="center")
+            self.grid.heading(col, text=col)
+            self.grid.column(col, width=100, anchor="center")
 
-        grid.bind("<<TreeviewSelect>>", self.on_row_select)
-
+        self.grid.bind("<<TreeviewSelect>>", self.on_row_select)
         self.reload_grid(table_name)
 
-
     def values_from_entries(self):
+        """Collects and validates input data from the form entries."""
         vals = {}
         for col, dtype, nullable in self.table_meta:
             raw = self.entries[col].get()
             if nullable == "N" and raw == "":
-                raise ValueError(f"{col} is mandatory.")
+                raise ValueError(f"Mandatory field '{col}' is missing.")
             vals[col] = coerce(raw, dtype)
         return vals
 
     def insert_row(self, table):
+        """Executes a dynamic INSERT SQL statement."""
         try:
             vals = self.values_from_entries()
-        except ValueError as e:
-            messagebox.showerror("Validation error", str(e))
-            return
-        columns = ", ".join(vals)
-        binds   = ", ".join(f":{i+1}" for i in range(len(vals)))
-        sql = f"INSERT INTO {table} ({columns}) VALUES ({binds})"
-        try:
-            with self.conn.cursor() as c:
-                c.execute(sql, list(vals.values()))
-                self.conn.commit()
-        except cx_Oracle.Error as e:
-            messagebox.showerror("DB error", str(e))
-            return
-        self.reload_grid(table)
-        self.clear_form()
-        messagebox.showinfo("Success", "Row inserted.")
+            cols = ", ".join(vals.keys())
+            binds = ", ".join([f":{i+1}" for i in range(len(vals))])
+            sql = f"INSERT INTO {table} ({cols}) VALUES ({binds})"
+            
+            conn = self.get_conn()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(sql, list(vals.values()))
+                    conn.commit()
+                messagebox.showinfo("Success", "New record inserted successfully.")
+                self.reload_grid(table)
+                self.clear_form()
+            finally:
+                self.release_conn(conn)
+        except Exception as e:
+            messagebox.showerror("Database Error", str(e))
 
     def update_row(self, table):
+        """Executes a dynamic UPDATE SQL statement using Primary Keys."""
         if not self.selected_pk:
-            messagebox.showwarning("No row", "Select a row first.")
+            messagebox.showwarning("Selection Required", "Please select a row from the grid first.")
             return
         try:
             vals = self.values_from_entries()
-        except ValueError as e:
-            messagebox.showerror("Validation error", str(e))
-            return
-        sets  = ", ".join(f"{c}=:{i+1}" for i, c in enumerate(vals))
-        where = " AND ".join(f"{pk}=:{len(vals)+i+1}" for i, pk in enumerate(self.pk_cols))
-        sql   = f"UPDATE {table} SET {sets} WHERE {where}"
-        try:
-            with self.conn.cursor() as c:
-                c.execute(sql, list(vals.values()) + list(self.selected_pk))
-                self.conn.commit()
-        except cx_Oracle.Error as e:
-            messagebox.showerror("DB error", str(e))
-            return
-        self.reload_grid(table)
-        messagebox.showinfo("Success", "Row updated.")
+            sets = ", ".join([f"{c}=:{i+1}" for i, c in enumerate(vals)])
+            where = " AND ".join([f"{pk}=:{len(vals)+i+1}" for i, pk in enumerate(self.pk_cols)])
+            sql = f"UPDATE {table} SET {sets} WHERE {where}"
+
+            conn = self.get_conn()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(sql, list(vals.values()) + list(self.selected_pk))
+                    conn.commit()
+                messagebox.showinfo("Success", "Record updated successfully.")
+                self.reload_grid(table)
+            finally:
+                self.release_conn(conn)
+        except Exception as e:
+            messagebox.showerror("Update Error", str(e))
 
     def delete_row(self, table):
+        """Executes a dynamic DELETE SQL statement."""
         if not self.selected_pk:
-            messagebox.showwarning("No row", "Select a row first.")
+            messagebox.showwarning("Selection Required", "Please select a row to delete.")
             return
-        if not messagebox.askyesno("Confirm", "Delete selected row?"):
+        if not messagebox.askyesno("Confirm Deletion", "Are you sure you want to permanently delete this record?"):
             return
-        where = " AND ".join(f"{pk}=:{i+1}" for i, pk in enumerate(self.pk_cols))
-        sql   = f"DELETE FROM {table} WHERE {where}"
-        try:
-            with self.conn.cursor() as c:
-                c.execute(sql, self.selected_pk)
-                self.conn.commit()
-        except cx_Oracle.Error as e:
-            messagebox.showerror("DB error", str(e))
-            return
-        self.reload_grid(table)
-        self.clear_form()
-        messagebox.showinfo("Success", "Row deleted.")
+        
+        where = " AND ".join([f"{pk}=:{i+1}" for i, pk in enumerate(self.pk_cols)])
+        sql = f"DELETE FROM {table} WHERE {where}"
 
-    # ------------UI helpers---------------------------------------------------------------------------
+        conn = self.get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(sql, self.selected_pk)
+                conn.commit()
+            messagebox.showinfo("Success", "Record deleted successfully.")
+            self.reload_grid(table)
+            self.clear_form()
+        finally:
+            self.release_conn(conn)
+
+    def reload_grid(self, table):
+        """Refreshes the data grid with the latest records from the database."""
+        for row in self.grid.get_children():
+            self.grid.delete(row)
+        conn = self.get_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(f"SELECT * FROM {table}")
+            for rec in cur:
+                self.grid.insert("", "end", values=list(rec))
+        finally:
+            self.release_conn(conn)
+
     def clear_form(self):
+        """Clears all input fields in the current form."""
         for e in self.entries.values():
             e.delete(0, "end")
         self.selected_pk = None
-        self.grid.selection_remove(self.grid.selection())
 
-    def on_row_select(self, _event):
+    def on_row_select(self, event):
+        """Populates the form when a row is selected in the data grid."""
         sel = self.grid.selection()
-        if not sel:
-            return
+        if not sel: return
         values = self.grid.item(sel)["values"]
+        
+        # Fill entries with grid values
         for (col, *_), val in zip(self.table_meta, values):
             self.entries[col].delete(0, "end")
-            self.entries[col].insert(0, val if val is not None else "")
-        self.selected_pk = tuple(values[self.grid["columns"].index(pk)] for pk in self.pk_cols)
+            self.entries[col].insert(0, val if val is not None and str(val) != "None" else "")
+        
+        # Determine the Primary Key values for the selected row for future UPDATE/DELETE
+        col_names = [c[0] for c in self.table_meta]
+        self.selected_pk = tuple(values[col_names.index(pk)] for pk in self.pk_cols)
 
-    def reload_grid(self, table):
-        for row in self.grid.get_children():
-            self.grid.delete(row)
-        cur = self.conn.cursor()
-        cur.execute(f"SELECT * FROM {table}")
-        for rec in cur:
-            self.grid.insert("", "end", values=list(rec))
-
-
-#---------------------------------------------------------------------------
-#  Launch
-#---------------------------------------------------------------------------
 if __name__ == "__main__":
+    # Main entry point: Initialize the connection pool and launch the application
     try:
-        dsn  = make_dsn(DB_HOST, DB_PORT, DB_SERVICE)
-        conn = cx_Oracle.connect(user=DB_USER, password=DB_PASSWORD, dsn=dsn)
-    except cx_Oracle.Error as err:
-        messagebox.showerror("Connection failed", str(err))
-        sys.exit(1)
-
-    oracleGUIapp(conn).mainloop()
+        dsn_str = f"{DB_HOST}:{DB_PORT}/{DB_SERVICE}"
+        # Create a persistent pool for improved performance and resource handling
+        connection_pool = oracledb.create_pool(
+            user=DB_USER, 
+            password=DB_PASSWORD, 
+            dsn=dsn_str,
+            min=1, 
+            max=5, 
+            increment=1
+        )
+        app = OracleGUIApp(connection_pool)
+        app.mainloop()
+    except Exception as e:
+        print(f"FAILED TO START APPLICATION: {e}")
