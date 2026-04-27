@@ -1,2 +1,4 @@
 oracledb>=2.2      #python-oracledb thick driver (thin did not work because of a password security issue)
 tk                 #tkinter for gui 
+python-oracledb
+python-dotenv
